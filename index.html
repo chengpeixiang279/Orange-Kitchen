@@ -4,14 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Orange Order - 厨房接单大屏</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         * { box-sizing: border-box; font-family: 'PingFang SC', sans-serif; }
         body { background-color: #f0f3f6; margin: 0; padding: 20px; }
         .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 15px 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-left: 6px solid #ff9f43; margin-bottom: 20px; }
         .header h1 { margin: 0; font-size: 1.4em; }
-        .status { color: #2ecc71; font-weight: bold; font-size: 0.9em; }
+        .status { color: #e67e22; font-weight: bold; font-size: 0.9em; }
         .order-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-        .order-card { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.06); border-top: 5px solid #ff9f43; display: flex; flex-direction: column; overflow: hidden; animation: newOrder 0.5s ease-out; }
+        .order-card { background: white; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.06); border-top: 5px solid #ff9f43; display: flex; flex-direction: column; overflow: hidden; animation: newOrder 0.4s ease-out; }
         .order-header { padding: 12px; background: #fffcf7; border-bottom: 1px dashed #eee; display: flex; justify-content: space-between; }
         .order-body { padding: 15px; flex: 1; }
         .food-item { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
@@ -19,14 +20,14 @@
         .food-count { font-weight: bold; background: #f0f0f0; padding: 2px 6px; border-radius: 4px; }
         .btn-complete { background: #ff9f43; color: white; border: none; padding: 10px; width: 100%; font-weight: bold; cursor: pointer; }
         .empty { grid-column: 1/-1; text-align: center; padding: 80px; color: #999; background: white; border-radius: 12px; }
-        @keyframes newOrder { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        @keyframes newOrder { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
     </style>
 </head>
 <body>
 
     <div class="header">
-        <h1>🍳 橙香厨房无线接单端</h1>
-        <div class="status" id="status-text">● 云端监听中</div>
+        <h1>🍳 橙香厨房无线接单端 (MQTT版)</h1>
+        <div class="status" id="status-text">📡 正在挂载高速网络看板...</div>
     </div>
 
     <div class="order-container" id="board">
@@ -36,9 +37,34 @@
     <audio id="sound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-84.wav" preload="auto"></audio>
 
 <script>
-    // 必须和点餐端完全一致
-    const ROOM_ID = "orange_shop_exclusive_2026"; 
+    // 频道标识（必须和点餐端完全一致）
+    const TOPIC_ID = "orange_shop_topic_2026_xyz"; 
     let orders = [];
+
+    // 链接云端 Broker
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+
+    client.on('connect', () => {
+        document.getElementById('status-text').innerText = "🟢 实时接收就绪 (点击屏幕可开启提示音)";
+        document.getElementById('status-text').style.color = "#2ecc71";
+        // 订阅点餐端专属的主题
+        client.subscribe(TOPIC_ID);
+    });
+
+    // 监听实时管道传输过来的新数据
+    client.on('message', (topic, message) => {
+        if(topic === TOPIC_ID) {
+            try {
+                const data = JSON.parse(message.toString());
+                // 防重验证
+                if(!orders.some(o => o.id === data.id)) {
+                    orders.unshift(data); 
+                    render();
+                    try { document.getElementById('sound').play(); } catch(e){}
+                }
+            } catch (e) { console.log("数据解析错误"); }
+        }
+    });
 
     function render() {
         const board = document.getElementById('board');
@@ -70,33 +96,12 @@
         render();
     }
 
-    // 📡 核心：高频轮询公用网络管道，捕获来自另一台设备的订单
-    let lastCheckedTime = Date.now();
-    function startListening() {
-        setInterval(() => {
-            fetch(`https://api.paster.io/packet/${ROOM_ID}`)
-            .then(res => res.json())
-            .then(data => {
-                // 如果接收到了新数据，并且其ID是新鲜的
-                if(data && data.id && data.id > lastCheckedTime) {
-                    // 查重防止重复塞入
-                    if(!orders.some(o => o.id === data.id)) {
-                        orders.unshift(data); 
-                        lastCheckedTime = data.id;
-                        render();
-                        try { document.getElementById('sound').play(); } catch(e){}
-                    }
-                }
-            }).catch(e => console.log("网络等待中..."));
-        }, 1500); // 每1.5秒无线检查一次云端
-    }
-
-    // 页面首次点击激活声音引擎
+    // 页面首次点击激活浏览器被动的声音系统
     document.body.addEventListener('click', () => {
-        document.getElementById('status-text').innerText = "● 云端实时监听中（已激活声音）";
+        if(client.connected) {
+            document.getElementById('status-text').innerText = "🟢 实时接收就绪 (新订单提示音已激活)";
+        }
     }, {once: true});
-
-    startListening();
 </script>
 </body>
 </html>
